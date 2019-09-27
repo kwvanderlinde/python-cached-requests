@@ -41,12 +41,8 @@ class Tee(RawIOBase):
     # region IOBase methods
 
     def close(self) -> None:
-        chunk_size = 1024
-        while True:
-            chunk = self.read(chunk_size)
-            if not chunk:
-                break
-        return super().close()
+        self.__reader.close()
+        self.__writer.close()
 
     @property
     def closed(self) -> bool:
