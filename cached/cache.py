@@ -3,6 +3,7 @@ from copy import copy
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -10,7 +11,6 @@ from typing import Mapping, Optional
 from .util import clamp, DataclassJSONEncoder, DataclassJSONDecoder, Tee
 
 from .model import CacheEntry, Request, Response
-
 
 class Cache(ABC):
     """
@@ -140,6 +140,31 @@ class HttpAwareCache(Cache):
         return method in {'GET'}
 
 
+@dataclass
+class FileCacheResponseModel:
+    status: int
+    reason: str
+    headers: Mapping[str, str]
+    body_path: Path
+
+
+@dataclass
+class FileCacheEntryModel:
+    entry_path: Path
+    request: Request
+    response: FileCacheResponseModel
+
+
+class CorruptEntry(Exception):
+    def __init__(self, entry_path: Path):
+        super().__init__()
+        self.__entry_path = entry_path
+
+    @property
+    def entry_path(self) -> Path:
+        return self.__entry_path
+
+
 class FileCache(Cache):
     # TODO Implement proper file locking, etc.
 
@@ -162,8 +187,12 @@ class FileCache(Cache):
     # separately tested
     def _get_path(self, uri: str) -> Path:
         hashed = hashlib.sha256(uri.encode('utf-8')).hexdigest()
-        subdirectories = (list(hashed[:self.__cache_directory_levels])
-                          + [hashed[self.__cache_directory_levels:]])
+        return self._split_path(hashed)
+
+    def _split_path(self, path: str) -> Path:
+        # TODO Ensure that `path` is at least `self.__cache_directory_levels` long.
+        subdirectories = (list(path[:self.__cache_directory_levels])
+                          + [path[self.__cache_directory_levels:]])
         subdirectory = Path(*subdirectories)
         return subdirectory
 
@@ -175,41 +204,64 @@ class FileCache(Cache):
     # JSON, wtih the headers as literal objects, which can be compared for
     # equality with the current set of headers.
 
-    def get(self, request: Request) -> Optional[CacheEntry]:
-        path = self.__entry_directory / self._get_path(request.uri)
-        print('Attempting to retrieve cache entry at path: {}'.format(path))
+    def _load_entry(self, request: Request) -> FileCacheEntryModel:
+        """
+        Read a cache entry from a file.
+
+        @param request
+            The request for which a matching cache entry is desired. The path to the cache entry will be deduced from
+            `request`.
+        @return
+            A tuple containing:
+            1. The path to the entry file.
+            2. The decoded contents of the file. If the file is corrupt in any way, this will be `None`.
+        @throws CorruptEntry
+            If the entry file could not be parsed.
+        """
+        entry_path = self.__entry_directory / self._get_path(request.uri)
         try:
-            with open(path, 'r') as f:
+            with open(entry_path, 'r') as f:
                 entry = json.load(f)
-            entry = CacheEntry(
-                Request(
-                    method=entry['request']['method'],
-                    uri=entry['request']['uri'],
-                    headers=entry['request']['headers']
-                ),
-                Response(
-                    status=entry['response']['status'],
-                    reason=entry['response']['reason'],
-                    headers=entry['response']['headers'],
-                    body=open(self.__body_directory / Path(entry['response']['body']), 'rb')
+            return FileCacheEntryModel(entry_path=entry_path,
+                                       request=Request(
+                                           method=entry['request']['method'],
+                                           uri=entry['request']['uri'],
+                                           headers=entry['request']['headers']
+                                       ),
+                                       response=FileCacheResponseModel(
+                                           status=entry['response']['status'],
+                                           reason=entry['response']['reason'],
+                                           headers=entry['response']['headers'],
+                                           body_path=self.__body_directory / Path(entry['response']['body'])))
+        except FileNotFoundError as e:
+            raise e
+        except (KeyError, json.JSONDecodeError) as e:
+            raise CorruptEntry(entry_path)
+
+    def get(self, request: Request) -> Optional[CacheEntry]:
+        try:
+            entry_model = self._load_entry(request)
+            return CacheEntry(
+                request=entry_model.request,
+                response=Response(
+                    status=entry_model.response.status,
+                    reason=entry_model.response.reason,
+                    headers=entry_model.response.headers,
+                    body=open(entry_model.response.body_path, 'rb')
                 )
             )
-
-            return entry
-        except (KeyError, json.JSONDecodeError) as e:
-            # We deliberately treat this as a fault boundary as it could have resulted from a previous bad run or user
-            # tampering. It's also true that this is a natural place to remove the corrupt entry and therefore indicate
-            # to the caller to try the request again.
-            self.delete(request)
+        except CorruptEntry as e:
+            # TODO Log this.
+            e.entry_path.unlink()
+            return None
         except FileNotFoundError as e:
             # TODO Log this.
             return None
 
     def add(self, request: Request, response: Response) -> CacheEntry:
-        path = self._get_path(request.uri)
-        entry_path = self.__entry_directory / path
-        # TODO Generalized to multiple cached responses, this might not be reliable.
-        body_path = self.__body_directory / path
+        entry_path = self.__entry_directory / self._get_path(request.uri)
+        # We use a randomized body path as the entry can point to it anyways.
+        body_path = self.__body_directory / self._split_path(os.urandom(32).hex())
 
         serialized = {
             'request': {
@@ -221,7 +273,7 @@ class FileCache(Cache):
                 'status': response.status,
                 'reason': response.reason,
                 'headers': response.headers,
-                'body': str(body_path)
+                'body': str(body_path.relative_to(self.__body_directory))
             }
         }
 
@@ -230,25 +282,21 @@ class FileCache(Cache):
         if entry_path.exists():
             raise Exception('I refuse to overwrite a cache entry')
 
-        CHUNK_SIZE = 1024
-        # Since the response will be fully read (`Tee` guarantees this), we can use `Tee` to lazily populate the body
-        # cache as it is read.
-
-        # TODO Persist the body to a randomized location? That would prevent collisions with partial state.
-        temp_body = tempfile.NamedTemporaryFile(mode='wb', delete=False)
-
+        # The way we are using `Tee` here means that we will only cache a body that is fully read. This avoids waiting
+        # on the full download - say, if the user wants to interrupt the download - while also ensuring we don't write
+        # partial state to the cache.
+        temp_body_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
         def on_complete():
             # Move the body into place.
             body_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(Path(temp_body.name), body_path)
+            shutil.move(Path(temp_body_file.name), body_path)
             # Write the entry file, now that it's body pointer is valid.
             entry_path.parent.mkdir(parents=True, exist_ok=True)
             with open(entry_path, 'w') as f:
                 json.dump(serialized, f)
-
         tee = Tee(
             response.body,
-            temp_body,
+            temp_body_file,
             on_complete
         )
 
@@ -261,17 +309,19 @@ class FileCache(Cache):
         return result
 
     def delete(self, request: Request) -> None:
-        entry_path = self.__entry_directory / self._get_path(request.uri)
-        body_path = self.__body_directory / self._get_path(request.uri)
         try:
-            entry_path.unlink()
-        except FileNotFoundError:
-            # This might seem like a problem, but catching this exception actually avoids an exists-delete race.
+            entry_model = self._load_entry(request)
+            paths_to_delete = [entry_model.entry_path, entry_model.response.body_path]
+        except CorruptEntry as e:
             # TODO Log this.
-            print('Unable to unlink: {}'.format(entry_path))
-        try:
-            body_path.unlink()
-        except FileNotFoundError:
-            # This might seem like a problem, but catching this exception actually avoids an exists-delete race.
+            paths_to_delete = [e.entry_path]
+        except FileNotFoundError as e:
             # TODO Log this.
-            print('Unable to unlink: {}'.format(body_path))
+            return
+
+        for path in paths_to_delete:
+            try:
+                path.unlink()
+            except Exception as e:
+                # TODO Log this.
+                pass

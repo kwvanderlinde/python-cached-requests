@@ -167,14 +167,18 @@ class TestFileCache(TestCase):
 
             cache = FileCache(directory, 5)
             cache_entry = cache.add(request, response)
+            # Read the entire body to ensure all tee-ing is done.
+            body_contents = cache_entry.response.body.readall()
 
             self.assertTrue(expected_path.exists(), 'The cache should create the file for the cache entry')
             with open(expected_path, 'r') as f:
                 entry_contents = json.load(f)
 
+            # The body path is deliberately not predictable.
+            del expected_contents['response']['body']
+            del entry_contents['response']['body']
             self.assertEqual(expected_contents, entry_contents)
 
-            body_contents = cache_entry.response.body.read()
             self.assertEqual(expected_body_contents, body_contents)
 
     # TODO Test that a `add()` can be followed by a `get()`.
