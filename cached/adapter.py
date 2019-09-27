@@ -48,7 +48,6 @@ class CachedHTTPAdapter(HTTPAdapter):
         entry = self.cache.get(request)
         if entry is None:
             # No valid cached entry. Need to make the request.
-            self.cache.delete(request)  # In case an invalid entry is present.
             requests_response = super().send(requests_request, **kw)
             response = Response(status=requests_response.status_code,
                                 reason=requests_response.reason,

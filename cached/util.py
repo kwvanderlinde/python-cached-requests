@@ -1,7 +1,7 @@
 import dataclasses
 from io import RawIOBase, UnsupportedOperation
 import json
-from typing import io, Sequence, Type
+from typing import Callable, io, Sequence, Type
 
 
 def clamp(value, min, max):
@@ -26,23 +26,23 @@ class DataclassJSONDecoder(json.JSONDecoder):
 
 
 class Tee(RawIOBase):
-    def __init__(self, reader: io.IO[bytes], writer: io.IO[bytes]) -> None:
+    def __init__(self, reader: io.IO[bytes], writer: io.IO[bytes], on_complete: Callable[[], None]) -> None:
         self.__reader = reader
         self.__writer = writer
+        self.__on_complete = on_complete
 
     def _write_chunk(self, chunk: bytes) -> bytes:
         self.__writer.write(chunk)
+        if not chunk:
+            # Indicates EOF was reached in the reader.
+            self.__on_complete()
         return chunk
 
     # region IOBase methods
 
     def close(self) -> None:
-        chunk_size = 1024
-        while True:
-            chunk = self.read(chunk_size)
-            if not chunk:
-                break
-        return super().close()
+        self.__reader.close()
+        self.__writer.close()
 
     @property
     def closed(self) -> bool:

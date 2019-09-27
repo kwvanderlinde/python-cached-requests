@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Mapping, Optional
 from .util import clamp, DataclassJSONEncoder, DataclassJSONDecoder, Tee
 
@@ -223,19 +225,32 @@ class FileCache(Cache):
             }
         }
 
-        body_path.parent.mkdir(parents=True, exist_ok=True)
         if body_path.exists():
             raise Exception('I refuse to overwrite an existing response body')
+        if entry_path.exists():
+            raise Exception('I refuse to overwrite a cache entry')
+
         CHUNK_SIZE = 1024
         # Since the response will be fully read (`Tee` guarantees this), we can use `Tee` to lazily populate the body
         # cache as it is read.
-        tee = Tee(response.body, open(body_path, 'wb'))
 
-        entry_path.parent.mkdir(parents=True, exist_ok=True)
-        if entry_path.exists():
-            raise Exception('I refuse to overwrite a cache entry')
-        with open(entry_path, 'w') as f:
-            json.dump(serialized, f)
+        # TODO Persist the body to a randomized location? That would prevent collisions with partial state.
+        temp_body = tempfile.NamedTemporaryFile(mode='wb', delete=False)
+
+        def on_complete():
+            # Move the body into place.
+            body_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(Path(temp_body.name), body_path)
+            # Write the entry file, now that it's body pointer is valid.
+            entry_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(entry_path, 'w') as f:
+                json.dump(serialized, f)
+
+        tee = Tee(
+            response.body,
+            temp_body,
+            on_complete
+        )
 
         response = copy(response)
         response.body = tee
