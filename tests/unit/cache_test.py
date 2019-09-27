@@ -41,9 +41,9 @@ class TestFileCache(TestCase):
                     'status': 200,
                     'reason': 'OK',
                     'headers': {
-                        'Vary': 'Accept'
+                        'Vary': 'Accept',
+                        'ETag': 'gibberish',
                     },
-                    'etag': 'gibberish',
                     'body': str(Path('path', 'to', 'body'))
                 }
             }),
@@ -59,9 +59,9 @@ class TestFileCache(TestCase):
                     status=200,
                     reason='OK',
                     headers={
-                        'Vary': 'Accept'
+                        'Vary': 'Accept',
+                        'ETag': 'gibberish',
                     },
-                    etag='gibberish',
                     body=Path('path', 'to', 'body')
                 ),
             ),
@@ -85,14 +85,14 @@ class TestFileCache(TestCase):
     def test_get(self, request: Request, expected_path: Optional[Path], entry_contents: Optional[str],
                  expected_entry: Optional[CacheEntry]):
         expected_body_path = Path('path', 'to', 'body')
-        expected_body_contents = 'some contents';
+        expected_body_contents = b'some contents';
 
         with TemporaryDirectory() as directory:
             directory = Path(directory)
 
             expected_body_path = directory / 'bodies' / expected_body_path
             expected_body_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(expected_body_path, 'w') as f:
+            with open(expected_body_path, 'wb') as f:
                 f.write(expected_body_contents)
 
             if expected_path is not None:
@@ -111,7 +111,6 @@ class TestFileCache(TestCase):
                 self.assertEqual(expected_entry.response.status, entry.response.status)
                 self.assertEqual(expected_entry.response.reason, entry.response.reason)
                 self.assertEqual(expected_entry.response.headers, entry.response.headers)
-                self.assertEqual(expected_entry.response.etag, entry.response.etag)
                 # Need to check file contents, not file descriptors.
                 body_contents = entry.response.body.read()
                 self.assertEqual(expected_body_contents, body_contents)
@@ -130,9 +129,9 @@ class TestFileCache(TestCase):
                 status=200,
                 reason='OK',
                 headers={
-                    'Vary': 'Accept'
+                    'Vary': 'Accept',
+                    'ETag': 'gibberish',
                 },
-                etag='gibberish',
                 body=BytesIO(b'some contents')
             ),
             b'some contents',
@@ -150,9 +149,9 @@ class TestFileCache(TestCase):
                     'status': 200,
                     'reason': 'OK',
                     'headers': {
-                        'Vary': 'Accept'
+                        'Vary': 'Accept',
+                        'ETag': 'gibberish',
                     },
-                    'etag': 'gibberish',
                     'body': Path('bodies', '9', '8', 'c', 'e', '0', 'b4f1e97102727131a3807371ff3494db4343c7ca41027ad7271a47af279')
                 }
             }
@@ -245,7 +244,6 @@ class TestHttpAwareCache(TestCase):
                     status=500,
                     reason='Internal Server Error',
                     headers={},
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -275,7 +273,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -306,7 +303,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -338,7 +334,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -370,7 +365,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -389,7 +383,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -420,7 +413,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -439,7 +431,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -470,7 +461,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -489,7 +479,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -520,7 +509,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -539,7 +527,6 @@ class TestHttpAwareCache(TestCase):
                     headers={
                         'Vary': 'X-MY-COOL-HEADER'
                     },
-                    etag=None,
                     body = BytesIO(b'')
                 )
             ),
@@ -587,9 +574,9 @@ class TestHttpAwareCache(TestCase):
                 status=200,
                 reason='OK',
                 headers={
-                    'Vary': 'Accept'
+                    'Vary': 'Accept',
+                    'ETag': 'gibberish',
                 },
-                etag='gibberish',
                 body=BytesIO(b'some contents')
             ),
             CacheEntry(
@@ -605,9 +592,9 @@ class TestHttpAwareCache(TestCase):
                     status=200,
                     reason='OK',
                     headers={
-                        'Vary': 'Accept'
+                        'Vary': 'Accept',
+                        'ETag': 'gibberish',
                     },
-                    etag='gibberish',
                     body=BytesIO(b'some contents')
                 )
             ),
@@ -628,9 +615,9 @@ class TestHttpAwareCache(TestCase):
                 status=500,
                 reason='OK',
                 headers={
-                    'Vary': 'Accept'
+                    'Vary': 'Accept',
+                    'ETag': 'gibberish',
                 },
-                etag='gibberish',
                 body=BytesIO(b'some contents')
             ),
             None,

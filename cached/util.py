@@ -30,7 +30,7 @@ class Tee(RawIOBase):
         self.__reader = reader
         self.__writer = writer
 
-    def __write_chunk(self, chunk: bytes) -> bytes:
+    def _write_chunk(self, chunk: bytes) -> bytes:
         self.__writer.write(chunk)
         return chunk
 
