@@ -10,6 +10,15 @@ cd <project_repository>
 # your library will bring the dependencies (via install_requires in setup.py)
 pipenv install -e .
 pipenv install --dev -e .[dev]
-# start hacking
+# Enter the virtual environment.
 pipenv shell
 ```
+Note that these commands *must* be run *outside* of a `pipenv` virtual environment. It's a mystery to me, but for some reason `pipenv` cannot handle the `.` passed to `pipenv install` when inside the virtual environment.
+
+## Running the tests
+
+It's as easy as running this under the `pipenv shell`:
+```
+env PYTHONPATH=. pytest --cov=cached --cov-report html
+```
+You can then view the coverage report by opening `htmlcov/index.html`.
