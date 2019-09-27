@@ -15,7 +15,7 @@ setup_params = dict(
     include_package_data=True,
     description='Memory-efficient caching for the requests library and Python 3',
     long_description=open('README.md').read(),
-    install_requires=['requests~=2.18.4', 'dataclasses~=0.6;python_version<"3.7"'],
+    install_requires=['requests~=2.20.0', 'dataclasses~=0.6;python_version<"3.7"'],
     extras_require={
         'dev': {
             'mockito': '~=1.1.1',
