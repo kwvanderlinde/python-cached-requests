@@ -81,7 +81,9 @@ class Tee(RawIOBase):
         return self._write_chunk(self.__reader.read(size))
 
     def readall(self):
-        return self._write_chunk(self.__reader.readall())
+        result = self._write_chunk(self.__reader.read())
+        self._write_chunk(self.__reader.read())
+        return result
 
     def readinto(self, buffer):
         # Just because I don't feel like figuring how to tee these.
