@@ -1,11 +1,15 @@
 from pathlib import Path
 
+import logging
 import requests
 from requests.structures import CaseInsensitiveDict
 from requests.adapters import HTTPAdapter
 
 from .cache import Cache, HttpAwareCache, FileCache
 from .model import Request, Response
+
+
+logger = logging.getLogger(__name__)
 
 
 class CachedHTTPAdapter(HTTPAdapter):
@@ -45,8 +49,10 @@ class CachedHTTPAdapter(HTTPAdapter):
                           uri=requests_request.url,
                           headers=dict(requests_request.headers))
 
+        logger.info('Attempting to find a matching cache entry.')
         entry = self.cache.get(request)
         if entry is None:
+            logger.info('No matching cache entry found.')
             # No valid cached entry. Need to make the request.
             requests_response = super().send(requests_request, **kw)
             response = Response(status=requests_response.status_code,
@@ -56,12 +62,13 @@ class CachedHTTPAdapter(HTTPAdapter):
             entry = self.cache.add(request, response)
             response = entry.response
         else:
+            logger.info('Found a matching cache entry. Using the cached response')
             # TODO Check if stale. If so, need to make the request with `If-None-Match: response.headers['etag']`,
             # checking for `HTTP 304 Not Modified`.
             # Staleness should be checked against either the time of response or request. Not sure.
             response = entry.response
 
-
+        logger.info('Converting the response to a requests.Response object.')
         # TODO Is this conversion complete?
         result = requests.Response()
         result.status_code = response.status
@@ -71,12 +78,17 @@ class CachedHTTPAdapter(HTTPAdapter):
         result.raw = response.body
         result.url = request.uri
         result.request = request
+
+        logger.info('Returning the response.')
         return result
 
     def close(self):
+        logger.info('Closing the cache')
         self.cache.close()
+        logger.info('Closing the adapter')
         super().close()
 
 
 def create(directory: Path) -> CachedHTTPAdapter:
+    logger.info('Creating a new HTTPAdapter that caches into {}'.format(directory))
     return CachedHTTPAdapter(HttpAwareCache(FileCache(directory, 5)))

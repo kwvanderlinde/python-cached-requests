@@ -3,14 +3,18 @@ from copy import copy
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
 import tempfile
 from typing import Mapping, Optional
 from .util import clamp, DataclassJSONEncoder, DataclassJSONDecoder, Tee
-
 from .model import CacheEntry, Request, Response
+
+
+logger = logging.getLogger(__name__)
+
 
 class Cache(ABC):
     """
@@ -84,13 +88,18 @@ class HttpAwareCache(Cache):
         self.__impl = implementation
 
     def get(self, request: Request) -> Optional[CacheEntry]:
+        logger.info('Delegating cache lookup to decorated cache.')
         entry = self.__impl.get(request)
         if entry is None:
+            logger.info('Decorated cache did not find a matching cache entry.')
             return None
 
         # region Only cache for response statuses that make sense to cache.
-        if (not self._is_cachable_status_code(entry.response.status)
-            or not self._is_cachable_method(entry.request.method)):
+        if not self._is_cachable_status_code(entry.response.status):
+            logger.info('Status code {} is not cachable'.format(entry.response.status))
+            return None
+        if not self._is_cachable_method(entry.request.method):
+            logger.info('Method {} is not cachable'.format(entry.request.method))
             return None
         # endregion
 
@@ -98,21 +107,18 @@ class HttpAwareCache(Cache):
         vary_header_keys = entry.response.headers.get('Vary', []).split(',')
         for key in vary_header_keys:
             if key not in entry.request.headers:
-                # TODO Log this unusual case.
-                print('Missing vary header in cached request: {}'.format(key))
+                logger.warning('The cache entry does not have all of its own Vary headers. Missing header: {}'.format(key))
                 return None
             expected_value = entry.request.headers[key]
 
             if key not in request.headers:
-                # Doesn't match because a required header was not present this time.
-                print('Missing vary header in request: {}'.format(key))
+                logger.info('Cache entry is rejected because the incoming request is missing a Vary header: {}'.format(key))
                 return None
             value = request.headers[key]
 
             if expected_value != value:
                 # Doesn't match as the vary header doesn't have the same value.
-                print('Incorrect vary header value in request: {} => {}, expected {}'.format(
-                    key, value, expected_value))
+                logger.info('Cache entry is rejected because the value for a Vary header is not equal to the value in the original request. Header: {}. Expected value: {}. Actual value: {}'.format(key, expected_value, value))
                 return None
         # endregion
 
@@ -120,16 +126,23 @@ class HttpAwareCache(Cache):
         # TODO
         # endregion
 
+        logger.info('Cache entry passed all HTTP checks. Returning entry from cache.')
+
         return entry
 
     def add(self, request: Request, response: Response) -> Optional[CacheEntry]:
-        if (not self._is_cachable_status_code(response.status)
-            or not self._is_cachable_method(request.method)):
+        if not self._is_cachable_status_code(response.status):
+            logger.info('Refusing to create cache entry. Status code {} is not cachable.'.format(entry.response.status))
+            return None
+        if not self._is_cachable_method(request.method):
+            logger.info('Refusing to create cache entry. Method {} is not cachable.'.format(entry.request.method))
             return None
 
+        logger.info('Delegating cache entry creation to decorated cache.')
         return self.__impl.add(request, response)
 
     def delete(self, request: Request) -> None:
+        logger.info('Delegating cache entry deletion to decorated cache.')
         self.__impl.delete(request)
 
     def _is_cachable_status_code(self, status: int) -> bool:
@@ -240,7 +253,9 @@ class FileCache(Cache):
 
     def get(self, request: Request) -> Optional[CacheEntry]:
         try:
+            logger.info('Looking at the file system for a cache entry matching the request.')
             entry_model = self._load_entry(request)
+            logger.info('Loaded entry file. Returning the cache entry')
             return CacheEntry(
                 request=entry_model.request,
                 response=Response(
@@ -250,18 +265,30 @@ class FileCache(Cache):
                     body=open(entry_model.response.body_path, 'rb')
                 )
             )
+        # TODO When if entry_model.response.body_path does not exist? We *must* distinguish that from the
+        # FileNotFuondError thrown for a missing entry. If the body does not exist, that should be treated the same as a
+        # CorruptEntry.
         except CorruptEntry as e:
-            # TODO Log this.
+            logger.warning('Found a corrupt cache entry. Deleting the entry file.')
             e.entry_path.unlink()
             return None
         except FileNotFoundError as e:
-            # TODO Log this.
+            logger.info('No matching cache entry found.')
             return None
 
     def add(self, request: Request, response: Response) -> CacheEntry:
+        logger.info('Building path to the entry file.')
         entry_path = self.__entry_directory / self._get_path(request.uri)
+        if entry_path.exists():
+            logger.warning('Aborting. The entry file already exists: {}'.format(entry_path))
+            raise Exception('I refuse to overwrite a cache entry')
+
+        logger.info('Building randomized path to the body file.')
         # We use a randomized body path as the entry can point to it anyways.
         body_path = self.__body_directory / self._split_path(os.urandom(32).hex())
+        if body_path.exists():
+            logger.warning('Aborting. The body file already exists: {}'.format(entry_path))
+            raise Exception('I refuse to overwrite an existing response body')
 
         serialized = {
             'request': {
@@ -277,20 +304,19 @@ class FileCache(Cache):
             }
         }
 
-        if body_path.exists():
-            raise Exception('I refuse to overwrite an existing response body')
-        if entry_path.exists():
-            raise Exception('I refuse to overwrite a cache entry')
-
+        logger.info('Tee the response body so we can write to the cache as it is read.')
         # The way we are using `Tee` here means that we will only cache a body that is fully read. This avoids waiting
         # on the full download - say, if the user wants to interrupt the download - while also ensuring we don't write
         # partial state to the cache.
         temp_body_file = tempfile.NamedTemporaryFile(mode='wb', delete=False)
         def on_complete():
-            # Move the body into place.
+            logger.info('Download complete.')
+
+            logger.info('Moving temporary body file into permanent location')
             body_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(Path(temp_body_file.name), body_path)
-            # Write the entry file, now that it's body pointer is valid.
+
+            logger.info('Creating entry file that points to the permanent body file')
             entry_path.parent.mkdir(parents=True, exist_ok=True)
             with open(entry_path, 'w') as f:
                 json.dump(serialized, f)
@@ -300,6 +326,7 @@ class FileCache(Cache):
             on_complete
         )
 
+        logger.info('Build a new cache entry using the tee\'d response body')
         response = copy(response)
         response.body = tee
         result = CacheEntry(
@@ -310,18 +337,21 @@ class FileCache(Cache):
 
     def delete(self, request: Request) -> None:
         try:
+            logger.info('Looking at the file system for a cache entry matching the request so that we can delete both the entry and the associated body.')
             entry_model = self._load_entry(request)
+            logger.info('Found a matching cache entry. Marking both the entry file and the body file for deletion.')
             paths_to_delete = [entry_model.entry_path, entry_model.response.body_path]
         except CorruptEntry as e:
-            # TODO Log this.
+            logger.warning('Found a corrupt cache entry. Marking only the entry file for deletion.')
             paths_to_delete = [e.entry_path]
         except FileNotFoundError as e:
             # TODO Log this.
+            logger.info('No matching cache entry found. Nothing to delete.')
             return
 
         for path in paths_to_delete:
             try:
+                logger.info('Deleting {}'.format(path))
                 path.unlink()
-            except Exception as e:
-                # TODO Log this.
-                pass
+            except Exception:
+                logger.exception('Unexpected error occurred while deleting {}'.format(path))
