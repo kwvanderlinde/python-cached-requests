@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import tempfile
 from typing import Mapping, Optional
-from .util import clamp, DataclassJSONEncoder, DataclassJSONDecoder, Tee
+from .util import clamp, Tee
 from .model import CacheEntry, Request, Response
 
 
@@ -132,10 +132,10 @@ class HttpAwareCache(Cache):
 
     def add(self, request: Request, response: Response) -> Optional[CacheEntry]:
         if not self._is_cachable_status_code(response.status):
-            logger.info('Refusing to create cache entry. Status code {} is not cachable.'.format(entry.response.status))
+            logger.info('Refusing to create cache entry. Status code {} is not cachable.'.format(response.status))
             return None
         if not self._is_cachable_method(request.method):
-            logger.info('Refusing to create cache entry. Method {} is not cachable.'.format(entry.request.method))
+            logger.info('Refusing to create cache entry. Method {} is not cachable.'.format(request.method))
             return None
 
         logger.info('Delegating cache entry creation to decorated cache.')
