@@ -5,24 +5,7 @@ from typing import Callable, io, Sequence, Type
 
 
 def clamp(value, min, max):
-    return sorted((0, value, 20))[1]
-
-
-class DataclassJSONEncoder(json.JSONEncoder):
-    def default(self, o):
-        if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
-        return super().default(o)
-
-
-class DataclassJSONDecoder(json.JSONDecoder):
-    def __init__(self, class_type: Type, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.__class_type = class_type
-
-    def decode(self, s):
-        result = super().decode(s)
-        return self.__class_type(**result)
+    return sorted((min, value, max))[1]
 
 
 class Tee(RawIOBase):

@@ -227,6 +227,34 @@ class TestHttpAwareCache(TestCase):
             None,
             None,
         ),
+
+        (
+            # When the cached entry is for a POST request, it does not qualify for caching by HTTP rules.
+            Request(
+                method='GET',
+                uri='http://google.ca',
+                headers={
+                    'Accept': 'application/pdf',
+                }
+            ),
+            CacheEntry(
+                Request(
+                    method='POST',
+                    uri='http://google.ca',
+                    headers={
+                        'Accept': 'application/pdf',
+                    }
+                ),
+                Response(
+                    status=200,
+                    reason='OK',
+                    headers={},
+                    body = BytesIO(b'')
+                )
+            ),
+            None,
+        ),
+
         (
             # When the cached entry is a 5xx error, it does not qualify for caching by HTTP rules.
             Request(
@@ -617,6 +645,29 @@ class TestHttpAwareCache(TestCase):
             ),
             Response(
                 status=500,
+                reason='Internal Server Error',
+                headers={
+                    'Vary': 'Accept',
+                    'ETag': 'gibberish',
+                },
+                body=BytesIO(b'some contents')
+            ),
+            None,
+            False,
+        ),
+
+        (
+            # When the request uses POST, the response is not cached.
+            Request(
+                method='POST',
+                uri='http://google.ca',
+                headers={
+                    'Accept': 'application/pdf',
+                    'X-something-else': 'some value',
+                }
+            ),
+            Response(
+                status=200,
                 reason='OK',
                 headers={
                     'Vary': 'Accept',
